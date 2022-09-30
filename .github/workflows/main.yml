@@ -1,0 +1,85 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+jobs:
+  build_sdist:
+    name: Build sdist
+    runs-on: ubuntu-20.04
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+
+      - name: Build sdist
+        run: |
+          mv faiss/faiss/python/swigfaiss.swig faiss/faiss/python/swigfaiss.i
+          python setup.py sdist
+
+      - uses: actions/upload-artifact@v2
+        with:
+          path: ./dist/*.tar.gz
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }} (${{ matrix.arch }}, ${{ matrix.gpu }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-20.04]
+        arch: [auto64]
+        gpu: [OFF]
+        include:
+          - os: ubuntu-20.04
+            arch: aarch64
+            gpu: OFF
+          - os: ubuntu-20.04
+            arch: auto64
+            gpu: ON
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - name: Set up QEMU
+        if: runner.os == 'Linux' && matrix.arch != 'auto64'
+        uses: docker/setup-qemu-action@v1
+        with:
+          platforms: arm64
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.4.0
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_ENVIRONMENT: >
+            FAISS_OPT_LEVEL=generic
+            FAISS_ENABLE_GPU=${{ matrix.gpu }}
+      - uses: actions/upload-artifact@v2
+        with:
+          path: ./wheelhouse/*.whl
+
+  publish:
+    name: Upload packages to PyPI
+    needs: [build_sdist, build_wheels]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'published'
+    steps:
+      - uses: actions/download-artifact@v2
+        with:
+          name: artifact
+          path: dist
+
+      - uses: pypa/gh-action-pypi-publish@v1.4.2
+        with:
+          user: ${{ secrets.PYPI_USERNAME }}
+          password: ${{ secrets.PYPI_PASSWORD }}
